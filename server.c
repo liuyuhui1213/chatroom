@@ -148,6 +148,14 @@ void rcv_snd(int n)
             {
                 join_chatroom(arg1, arg2, n);// 聊天室名称 密码 用户
             }
+            else if (strcmp(command, "publish") == 0 && strcmp(arg1, ":") == 0)
+            {
+                publish_status(arg2,n);// 消息 用户
+            }
+            else if (strcmp(command, "view") == 0 && strcmp(arg1, ":") == 0)
+            {
+                view_status(n);// 用户
+            }
             else if (strcmp(command, "ls") == 0 && strcmp(arg1, "-chatrooms") == 0)
             {
                 get_online_chatrooms(n);// 用户
@@ -178,6 +186,7 @@ void init()
     int i, j;
     user_count = 0;
     chatroom_count = 0;
+    statue_count = 0;
     for (i = 0; i < MAXMEM; i++)
     {
         online_users[i].status = -1;
@@ -190,18 +199,37 @@ void init()
             chatrooms[i].user[j] = -1;
         }
     }
-    char buf[20];
-    FILE *fp = NULL;
-    fp = fopen("users.txt", "r");
-    //从文件中读取用户
-    while (fscanf(fp, "%s", buf) != EOF)
+    for (i = 0; i < BUFFSIZE; i++)
     {
-        strcpy(users[user_count].username, buf);
-        fscanf(fp, "%s", buf);
-        strcpy(users[user_count].password, buf);
+        statues[i].status = -1;
+    }
+    char buf1[20];
+    char buf2[20];
+    FILE *fp1 = NULL;
+    FILE *fp2 = NULL;
+    fp1 = fopen("users.txt", "r");
+    fp2 = fopen("statues.txt", "r");
+    //从文件中读取用户
+    while (fscanf(fp1, "%s", buf1) != EOF)
+    {
+        strcpy(users[user_count].username, buf1);
+        fscanf(fp1, "%s", buf1);
+        strcpy(users[user_count].password, buf1);
         user_count++;
     }
-    fclose(fp);
+    //从文件中读取空间信息
+    while (fscanf(fp2, "%s", buf2) != EOF)
+    {
+        strcpy(statues[statue_count].time, buf2);
+        fscanf(fp2, "%s", buf2);
+        strcpy(statues[statue_count].name, buf2);
+        fscanf(fp2, "%s", buf2);
+        strcpy(statues[statue_count].message, buf2);
+        statues[statue_count].status=0;
+        statue_count++;
+    }
+    fclose(fp2);
+    fclose(fp1);
 }
 
 /*将用户保存到文件*/
@@ -220,6 +248,30 @@ void save_users()
         strcat(buf, "\n");
         fprintf(fp, buf);
     }
+    fclose(fp);
+}
+
+/*将动态保存到文件*/
+void save_statues()
+{
+    int i;
+    char buf[256];
+    FILE *fp = NULL;
+    fp = fopen("statues.txt", "w+");
+    for (i = 0; i < statue_count; i++)
+    {
+        strcpy(buf, statues[i].time);
+        strcat(buf, "\n");
+        fprintf(fp, buf);
+        strcpy(buf, statues[i].name);
+        strcat(buf, "\n");
+        fprintf(fp, buf);
+        strcpy(buf, statues[i].message);
+        strcat(buf, "\n");
+        fprintf(fp, buf);
+        statues[i].status=-1;
+    }
+    statue_count=0;
     fclose(fp);
 }
 
@@ -611,6 +663,96 @@ void join_chatroom(char *name, char *passwd, int sfd)
     }
 }
 
+/*发表动态*/
+void publish_status(char *msg, int sfd)
+{
+    int j;
+    char buf[BUFFSIZE],nowtime[20],name[20];
+    // 获取时间
+    time_t now;
+    time(&now);
+    struct tm *tempTime = localtime(&now);
+    strftime(nowtime, 20, "[%H:%M:%S]", tempTime);
+    strcpy(buf,nowtime);
+    // 获取姓名
+    for (j = 0; j < MAXMEM; j++)
+    {
+        if (sfd == online_users[j].socketfd)
+        {
+            strcpy(name, online_users[j].username);
+            break;
+        }
+    }
+
+    // 将消息写入空间数组
+    strcpy(statues[statue_count].name,name);
+    strcpy(statues[statue_count].time,nowtime);
+    strcpy(statues[statue_count].message,msg);
+    statues[statue_count].status=0;
+    statue_count++;
+
+    // 如果空间不够，将数组中 status 值为 0 的数据移动到数组低位，并将高位空出来
+    if(statue_count >= BUFFSIZE){
+        int write_index = 0;  
+        for (int read_index = 0; read_index < BUFFSIZE; read_index++) {  
+            if (statues[read_index].status == 0) {  
+                statues[write_index] = statues[read_index];  
+                write_index++;  
+            }  
+        }
+        statue_count = write_index;
+    }
+
+    if(statue_count <= BUFFSIZE){
+        // 发送发表成功
+        bzero(buf, sizeof(buf));  // 清零
+        strcpy(buf, "publish statue succeed:\n");
+        write(connfd[sfd], buf, strlen(buf) + 1);
+
+        bzero(buf, sizeof(buf));  // 清零
+        strcpy(buf,"\n========================");
+        strcat(buf,statues[statue_count-1].time);
+        strcat(buf," publish\n");
+        strcat(buf,statues[statue_count-1].name);
+        strcat(buf,":\n\t");
+        strcat(buf,statues[statue_count-1].message);
+        strcat(buf,"\n========================\n");
+        write(connfd[sfd], buf, strlen(buf) + 1);
+    }else
+    {
+        // 发送发表失败
+        bzero(buf, sizeof(buf));  // 清零
+        strcpy(buf, "publish statue false!\n");
+        write(connfd[sfd], buf, strlen(buf) + 1);
+    }
+}
+
+/*查看动态*/
+void view_status(int sfd)
+{
+    int i;
+    char buf[BUFFSIZE],nowtime[20],name[20];
+
+    for(i=0; i<BUFFSIZE; i++){
+        // 拼接消息
+        if (statues[i].status == 0)
+        {
+            bzero(buf, sizeof(buf));  // 清零
+            strcpy(buf,"\n========================");
+            strcat(buf,statues[i].time);
+            strcat(buf," publish\n");
+            strcat(buf,statues[i].name);
+            strcat(buf,":\n\t");
+            strcat(buf,statues[i].message);
+            strcat(buf,"\n========================\n");
+            write(connfd[sfd], buf, strlen(buf) + 1);
+        }
+    }
+    bzero(buf, sizeof(buf));  // 清零
+    strcpy(buf,"end========================\n\n");
+    write(connfd[sfd], buf, strlen(buf) + 1);
+}
+
 /*获取所有已创建的聊天室的信息*/
 void get_online_chatrooms(int sfd)
 {
@@ -766,6 +908,7 @@ void quit()
         if (strcmp(msg, "quit") == 0)
         {
             save_users();
+            save_statues();
             printf("Byebye... \n");
             close(listenfd);
             exit(0);

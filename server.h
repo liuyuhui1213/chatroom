@@ -33,22 +33,34 @@ struct chatroom
     int status;   //标识是否还存在 0:存在 -1:销毁
 };
 
+/*存储空间消息*/
+struct statue
+{
+    char name[20];
+    char time[20];
+    char message[256];
+    int status;
+};
+
 #define PORT 8888
-#define MAXMEM 20
-#define MAXROOM 5
-#define BUFFSIZE 256
+#define MAXMEM 20       // 最大在线人数
+#define MAXROOM 5       // 最大在线房间数
+#define BUFFSIZE 256    // 最大消息数、最大动态数
 
 int user_count;     //记录总的用户数
 int chatroom_count; //记录聊天室个数
+int statue_count;   //记录动态个数
 int listenfd;       //Socket描述符
 int connfd[MAXMEM]; //和用户交互的套接字描述符
 struct user users[MAXMEM];               //记录所有用户
 struct user_socket online_users[MAXMEM]; //记录在线用户
 struct chatroom chatrooms[MAXROOM];      //记录聊天室
+struct statue statues[BUFFSIZE];         //记录动态
 
 void init();
 void quit();
 void save_users();
+void save_statues();
 void register_user(int n);
 void rcv_snd(int p);
 void quit_client(int n);
@@ -60,6 +72,8 @@ void get_online_users(int sfd);
 void send_chatroom_msg(char *msg, int sfd);
 void create_chatroom(char *name, char *passwd, int sfd);
 void join_chatroom(char *name, char *passwd, int sfd);
+void publish_status(char *msg, int sfd);
+void view_status(int sfd);
 void get_online_chatrooms(int sfd);
 void change_passwd(int sfd, char *passwd);
 void get_inroom_users(int sfd);
