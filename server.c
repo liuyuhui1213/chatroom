@@ -1,7 +1,17 @@
 #include "server.h"
 
+// 创建读写锁
+pthread_rwlock_t rwlock;
+
 int main()
 {
+    // 避免写饥饿，将写优先级设置高于读优先级
+    pthread_rwlockattr_t attr;
+    pthread_rwlockattr_init(&attr);
+    pthread_rwlockattr_setkind_np(&attr,PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP);
+    pthread_rwlock_init(&rwlock,&attr);
+
+    // 资源初始化
     init();
 
     //创建|服务端和客户端地址
@@ -207,6 +217,9 @@ void init()
     char buf2[20];
     FILE *fp1 = NULL;
     FILE *fp2 = NULL;
+
+    pthread_rwlock_rdlock(&rwlock);// 加锁
+
     fp1 = fopen("users.txt", "r");
     fp2 = fopen("statues.txt", "r");
     //从文件中读取用户
@@ -230,6 +243,8 @@ void init()
     }
     fclose(fp2);
     fclose(fp1);
+
+    pthread_rwlock_unlock(&rwlock);// 解锁
 }
 
 /*将用户保存到文件*/
@@ -238,6 +253,9 @@ void save_users()
     int i;
     char buf[20];
     FILE *fp = NULL;
+
+    pthread_rwlock_wrlock(&rwlock);// 加锁
+
     fp = fopen("users.txt", "w+");
     for (i = 0; i < user_count; i++)
     {
@@ -249,6 +267,7 @@ void save_users()
         fprintf(fp, buf);
     }
     fclose(fp);
+    pthread_rwlock_unlock(&rwlock);// 解锁
 }
 
 /*将动态保存到文件*/
@@ -257,6 +276,7 @@ void save_statues()
     int i;
     char buf[256];
     FILE *fp = NULL;
+    pthread_rwlock_wrlock(&rwlock);// 加锁
     fp = fopen("statues.txt", "w+");
     for (i = 0; i < statue_count; i++)
     {
@@ -273,12 +293,14 @@ void save_statues()
     }
     statue_count=0;
     fclose(fp);
+    pthread_rwlock_unlock(&rwlock);// 解锁
 }
 
 /*服务器处理用户退出*/
 void quit_client(int n)
 {
     int ret, i;
+    pthread_rwlock_wrlock(&rwlock);// 加锁
     // 关闭对应描述符
     close(connfd[n]);
     connfd[n] = -1;
@@ -291,6 +313,7 @@ void quit_client(int n)
             online_users[i].status = -1;
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
     pthread_exit(&ret);
 }
 
@@ -328,7 +351,8 @@ int user_login(int n)
             {
                 sprintf(buf, "Login successfully.\n\n");
                 write(connfd[n], buf, strlen(buf + 1));
-
+                
+                pthread_rwlock_rdlock(&rwlock);
                 // 找到空位
                 for (j = 0; j < MAXMEM; j++)
                 {
@@ -338,6 +362,7 @@ int user_login(int n)
                 strcpy(online_users[j].username, username);
                 online_users[j].socketfd = n;
                 online_users[j].status = 0;
+                pthread_rwlock_unlock(&rwlock);// 解锁
                 return 0;
             }
             else
@@ -377,6 +402,7 @@ void register_user(int n)
         password[len - 1] = '\0'; // 去除换行符
     }
 
+    pthread_rwlock_rdlock(&rwlock);// 读锁
     // 寻找是否有重复用户名
     for (i = 0; i < MAXMEM; i++)
     {
@@ -387,14 +413,18 @@ void register_user(int n)
             return;
         }
     }
-    
+    pthread_rwlock_unlock(&rwlock);// 解锁
+
+    pthread_rwlock_wrlock(&rwlock);
     // 将新注册的用户添加
     strcpy(users[user_count].username, username);
     strcpy(users[user_count].password, password);
     user_count++;
+    pthread_rwlock_unlock(&rwlock);// 解锁
 
     sprintf(buf, "Account created successfully.\n\n");
     write(connfd[n], buf, strlen(buf) + 1);
+    
 }
 
 /*用户发送私聊信息*/
@@ -418,6 +448,7 @@ void send_private_msg(char *username, char *data, int sfd)
             break;
         }
     }
+    pthread_rwlock_rdlock(&rwlock);
     // 寻找接收者是否在线
     for (i = 0; i < MAXMEM; i++)
     {
@@ -434,9 +465,11 @@ void send_private_msg(char *username, char *data, int sfd)
             write(connfd[online_users[i].socketfd], buf, strlen(buf) + 1);
             strcpy(temp, "Sent successfully.\n");
             write(connfd[sfd], temp, strlen(temp) + 1);
+            pthread_rwlock_unlock(&rwlock);// 解锁
             return;
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
     strcpy(buf, "User is not online or user does not exist.\n");
     write(connfd[sfd], buf, strlen(buf) + 1);
     return;
@@ -473,6 +506,7 @@ void send_all_msg(char *msg, int sfd)
     strcat(buf, msg);
     strcat(buf, "\n");
 
+    pthread_rwlock_rdlock(&rwlock);
     for (i = 0; i < MAXMEM; i++)
     {
         // 存在且不是自己
@@ -481,7 +515,7 @@ void send_all_msg(char *msg, int sfd)
             write(connfd[i], buf, strlen(buf) + 1);
         }
     }
-    
+    pthread_rwlock_unlock(&rwlock);// 解锁
     strcpy(temp, "Sent successfully\n");
     write(connfd[sfd], temp, strlen(temp) + 1);
 }
@@ -500,6 +534,7 @@ void get_online_users(int sfd)
     strcat(buf, "\t");
     strcat(buf, "All online user(s):\n");
 
+    pthread_rwlock_rdlock(&rwlock);
     for (i = 0; i < MAXMEM; i++)
     {
         if (online_users[i].status == 0)
@@ -509,6 +544,7 @@ void get_online_users(int sfd)
             strcat(buf, "\n");
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
     write(connfd[sfd], buf, strlen(buf) + 1);
 }
 
@@ -565,6 +601,7 @@ void send_chatroom_msg(char *msg, int sfd)
         strcat(buf, ":\t");
         strcat(buf, msg);
         strcat(buf, "\n");
+        pthread_rwlock_rdlock(&rwlock);
         // 发送消息
         for (k = 0; k < 10; k++)
         {
@@ -573,6 +610,7 @@ void send_chatroom_msg(char *msg, int sfd)
                 write(connfd[chatrooms[i].user[k]], buf, strlen(buf) + 1);
             }
         }
+        pthread_rwlock_unlock(&rwlock);// 解锁
     }
 }
 
@@ -581,6 +619,8 @@ void create_chatroom(char *name, char *passwd, int sfd)
 {
     int i, j;
     char buf[BUFFSIZE];
+
+    pthread_rwlock_wrlock(&rwlock);
     // 寻找空聊天室
     for (i = 0; i < MAXROOM; i++)
     {
@@ -590,6 +630,7 @@ void create_chatroom(char *name, char *passwd, int sfd)
     strcpy(chatrooms[i].name, name);
     strcpy(chatrooms[i].passwd, passwd);
     chatrooms[i].status = 0;
+
     // 将创建者加入聊天室
     for (j = 0; j < 10; j++)
     {
@@ -597,6 +638,7 @@ void create_chatroom(char *name, char *passwd, int sfd)
             break;
     }
     chatrooms[i].user[j] = sfd;
+    pthread_rwlock_unlock(&rwlock);// 解锁
 
     strcpy(buf, "Successfully created chat room.\n");
     write(connfd[sfd], buf, strlen(buf) + 1);
@@ -638,6 +680,7 @@ void join_chatroom(char *name, char *passwd, int sfd)
                 {
                     if (strcmp(chatrooms[i].passwd, passwd) == 0)// 密码正确
                     {
+                        pthread_rwlock_wrlock(&rwlock);
                         for (j = 0; j < 10; j++)
                         {
                             if (chatrooms[i].user[j] == -1)// 寻找空余
@@ -647,6 +690,7 @@ void join_chatroom(char *name, char *passwd, int sfd)
                         }
                         // 加入
                         chatrooms[i].user[j] = sfd;
+                        pthread_rwlock_unlock(&rwlock);// 解锁
                         strcpy(buf, "Successfully joined the chat room.\n");
                         write(connfd[sfd], buf, strlen(buf) + 1);
                         return;
@@ -684,6 +728,7 @@ void publish_status(char *msg, int sfd)
         }
     }
 
+    pthread_rwlock_wrlock(&rwlock);
     // 将消息写入空间数组
     strcpy(statues[statue_count].name,name);
     strcpy(statues[statue_count].time,nowtime);
@@ -706,11 +751,11 @@ void publish_status(char *msg, int sfd)
     if(statue_count <= BUFFSIZE){
         // 发送发表成功
         bzero(buf, sizeof(buf));  // 清零
-        strcpy(buf, "publish statue succeed:\n");
+        strcpy(buf, "\npublish statue succeed:\n");
         write(connfd[sfd], buf, strlen(buf) + 1);
 
         bzero(buf, sizeof(buf));  // 清零
-        strcpy(buf,"\n========================");
+        strcpy(buf,"\n========================\n");
         strcat(buf,statues[statue_count-1].time);
         strcat(buf," publish\n");
         strcat(buf,statues[statue_count-1].name);
@@ -725,6 +770,7 @@ void publish_status(char *msg, int sfd)
         strcpy(buf, "publish statue false!\n");
         write(connfd[sfd], buf, strlen(buf) + 1);
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
 }
 
 /*查看动态*/
@@ -733,12 +779,13 @@ void view_status(int sfd)
     int i;
     char buf[BUFFSIZE],nowtime[20],name[20];
 
+    pthread_rwlock_rdlock(&rwlock);
     for(i=0; i<BUFFSIZE; i++){
         // 拼接消息
         if (statues[i].status == 0)
         {
             bzero(buf, sizeof(buf));  // 清零
-            strcpy(buf,"\n========================");
+            strcpy(buf,"\n========================\n");
             strcat(buf,statues[i].time);
             strcat(buf," publish\n");
             strcat(buf,statues[i].name);
@@ -748,8 +795,10 @@ void view_status(int sfd)
             write(connfd[sfd], buf, strlen(buf) + 1);
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
+
     bzero(buf, sizeof(buf));  // 清零
-    strcpy(buf,"end========================\n\n");
+    strcpy(buf,"end\n\n");
     write(connfd[sfd], buf, strlen(buf) + 1);
 }
 
@@ -766,6 +815,7 @@ void get_online_chatrooms(int sfd)
     strcpy(buf, nowtime);
     strcat(buf, "\tAll online chat room(s):\n");
 
+    pthread_rwlock_rdlock(&rwlock);
     for (i = 0; i < MAXROOM; i++)
     {
         if (chatrooms[i].status == 0)
@@ -775,6 +825,8 @@ void get_online_chatrooms(int sfd)
             strcat(buf, "\n");
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
+
     write(connfd[sfd], buf, strlen(buf) + 1);
 }
 
@@ -792,6 +844,7 @@ void change_passwd(int sfd, char *passwd)
             break;
         }
     }
+    pthread_rwlock_wrlock(&rwlock);
     // 根据用户名修改密码
     for (i = 0; i < MAXMEM; i++)
     {
@@ -803,6 +856,7 @@ void change_passwd(int sfd, char *passwd)
             break;
         }
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
 }
 
 /*查询所有加入某聊天室的用户*/
@@ -840,6 +894,8 @@ void get_inroom_users(int sfd)
         strcat(buf, "\tAll users in the ");
         strcat(buf, chatrooms[room].name);
         strcat(buf, ":\n");
+
+        pthread_rwlock_rdlock(&rwlock);
         for (i = 0; i < 10; i++)
         {
             if (chatrooms[room].user[i] >= 0)
@@ -853,6 +909,7 @@ void get_inroom_users(int sfd)
                     }
                 }
         }
+        pthread_rwlock_unlock(&rwlock);// 解锁
         write(connfd[sfd], buf, strlen(buf) + 1);
     }
 }
@@ -865,6 +922,7 @@ void exit_chatroom(int sfd)
     flag = -1;
     char buf[BUFFSIZE];
     
+    pthread_rwlock_wrlock(&rwlock);
     for (i = 0; i < MAXROOM; i++)
     {
         if (chatrooms[i].status == 0)
@@ -883,6 +941,8 @@ void exit_chatroom(int sfd)
         if (flag == 0)
             break;
     }
+    pthread_rwlock_unlock(&rwlock);// 解锁
+
     if (flag == -1)
     {
         strcpy(buf, "You have not joined the chat room.\n");
@@ -910,6 +970,9 @@ void quit()
             save_users();
             save_statues();
             printf("Byebye... \n");
+
+            //销毁读写锁
+            pthread_rwlock_destroy(&rwlock);
             close(listenfd);
             exit(0);
         }
